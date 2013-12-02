@@ -800,6 +800,13 @@ class ShellCase(AdaptedConfigurationTestCaseMixIn, ShellTestCase):
         arg_str = '--config-dir {0} {1}'.format(self.get_config_dir(), arg_str)
         return self.run_script('salt-call', arg_str, with_retcode=with_retcode)
 
+    def run_cloud(self, arg_str, catch_stderr=False, timeout=None):
+        '''
+        Execute salt-cloud
+        '''
+        arg_str = '-c {0} {1}'.format(self.get_config_dir(), arg_str)
+        return self.run_script('salt-cloud', arg_str, catch_stderr, timeout)
+
 
 class ShellCaseCommonTestsMixIn(CheckShellBinaryNameAndVersionMixIn):
 
