@@ -16,6 +16,17 @@ ensure_in_syspath('../../')
 import salt.loader
 import salt.config
 from salt.state import HighState
+from integration import TMP
+
+GPG_KEYDIR = os.path.join(TMP, 'gpg-keydir')
+
+# The keyring library uses `getcwd()`, let's make sure we in a good directory
+# before importing keyring
+if not os.path.isdir(GPG_KEYDIR):
+    os.makedirs(GPG_KEYDIR)
+
+os.chdir(GPG_KEYDIR)
+
 
 OPTS = salt.config.minion_config(None)
 OPTS['state_events'] = False
@@ -24,14 +35,14 @@ OPTS['file_client'] = 'local'
 OPTS['file_roots'] = dict(base=['/tmp'])
 OPTS['test'] = False
 OPTS['grains'] = salt.loader.grains(OPTS)
-OPTS['gpg_keydir'] = os.getcwd()
+OPTS['gpg_keydir'] = GPG_KEYDIR
 
-ENCRYPTED_STRING = """
+ENCRYPTED_STRING = '''
 -----BEGIN PGP MESSAGE-----
 I AM SO SECRET!
 -----END PGP MESSAGE-----
-"""
-DECRYPTED_STRING = "I am not a secret anymore"
+'''
+DECRYPTED_STRING = 'I am not a secret anymore'
 SKIP = False
 
 try:
@@ -65,7 +76,7 @@ class GPGTestCase(TestCase):
     def make_nested_object(self, s):
         return OrderedDict([
             ('array_key', [1, False, s]),
-            ('string_key', "A Normal String"),
+            ('string_key', 'A Normal String'),
             ('dict_key', {1: None}),
         ])
 

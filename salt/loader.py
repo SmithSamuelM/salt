@@ -332,7 +332,7 @@ def render(opts, functions, states=None):
     return rend
 
 
-def grains(opts):
+def grains(opts, force_refresh=False):
     '''
     Return the functions for the dynamic grains and the values for the static
     grains.
@@ -372,7 +372,7 @@ def grains(opts):
         opts['grains'] = {}
 
     load = _create_loader(opts, 'grains', 'grain')
-    grains_info = load.gen_grains()
+    grains_info = load.gen_grains(force_refresh)
     grains_info.update(opts['grains'])
     return grains_info
 
@@ -778,11 +778,13 @@ class Loader(object):
         for mod in self.modules:
             if not hasattr(mod, '__salt__') or (
                 not in_pack(pack, '__salt__') and
-                not str(mod.__name__).startswith('salt.loaded.int.grain')
+                (not str(mod.__name__).startswith('salt.loaded.int.grain') and
+                 not str(mod.__name__).startswith('salt.loaded.ext.grain'))
             ):
                 mod.__salt__ = funcs
             elif not in_pack(pack, '__salt__') and \
-                    str(mod.__name__).startswith('salt.loaded.int.grain'):
+                    (str(mod.__name__).startswith('salt.loaded.int.grain') or
+                     str(mod.__name__).startswith('salt.loaded.ext.grain')):
                 mod.__salt__.update(funcs)
         return funcs
 
@@ -1144,7 +1146,7 @@ class Loader(object):
             funcs[key[key.rindex('.')] + 1:] = fun
         return funcs
 
-    def gen_grains(self):
+    def gen_grains(self, force_refresh=False):
         '''
         Read the grains directory and execute all of the public callable
         members. Then verify that the returns are python dict's and return
@@ -1158,7 +1160,7 @@ class Loader(object):
             if os.path.isfile(cfn):
                 grains_cache_age = int(time.time() - os.path.getmtime(cfn))
                 if self.opts.get('grains_cache_expiration', 300) >= grains_cache_age and not \
-                        self.opts.get('refresh_grains_cache', False):
+                        self.opts.get('refresh_grains_cache', False) and not force_refresh:
                     log.debug('Retrieving grains from cache')
                     try:
                         with salt.utils.fopen(cfn, 'rb') as fp_:
@@ -1167,12 +1169,15 @@ class Loader(object):
                     except (IOError, OSError):
                         pass
                 else:
-                    log.debug('Grains cache last modified {0} seconds ago and '
-                              'cache expiration is set to {1}. '
-                              'Grains cache expired. Refreshing.'.format(
-                                  grains_cache_age,
-                                  self.opts.get('grains_cache_expiration', 300)
-                              ))
+                    if force_refresh:
+                        log.debug('Grains refresh requested. Refreshing grains.')
+                    else:
+                        log.debug('Grains cache last modified {0} seconds ago and '
+                                  'cache expiration is set to {1}. '
+                                  'Grains cache expired. Refreshing.'.format(
+                                      grains_cache_age,
+                                      self.opts.get('grains_cache_expiration', 300)
+                                  ))
             else:
                 log.debug('Grains cache file does not exist.')
         grains_data = {}

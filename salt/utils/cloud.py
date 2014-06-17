@@ -15,7 +15,7 @@ import subprocess
 import multiprocessing
 import logging
 import pipes
-import json
+import msgpack
 import traceback
 import copy
 import re
@@ -188,7 +188,7 @@ def minion_config(opts, vm_):
     '''
 
     # Let's get a copy of the salt minion default options
-    minion = salt.config.DEFAULT_MINION_OPTS.copy()
+    minion = copy.deepcopy(salt.config.DEFAULT_MINION_OPTS)
     # Some default options are Null, let's set a reasonable default
     minion.update(
         log_level='info',
@@ -233,7 +233,7 @@ def master_config(opts, vm_):
     Return a master's configuration for the provided options and VM
     '''
     # Let's get a copy of the salt master default options
-    master = salt.config.DEFAULT_MASTER_OPTS.copy()
+    master = copy.deepcopy(salt.config.DEFAULT_MASTER_OPTS)
     # Some default options are Null, let's set a reasonable default
     master.update(
         log_level='info',
@@ -1335,11 +1335,9 @@ def fire_event(key, msg, tag, args=None, sock_dir=None, transport='zeromq'):
 
 
 def _exec_ssh_cmd(cmd,
-                  error_msg='Failed to execute command {0!r}: {1}\n{2}',
+                  error_msg='A wrong password has been issued while establishing ssh session',
                   **kwargs):
     password_retries = kwargs.get('password_retries', 3)
-    error_msg = (
-        'A wrong password has been issued while establishing ssh session')
     try:
         stdout, stderr = None, None
         proc = vt.Terminal(
@@ -1871,10 +1869,10 @@ def request_minion_cachedir(
         'provider': provider,
     }
 
-    fname = '{0}.json'.format(minion_id)
+    fname = '{0}.pp'.format(minion_id)
     path = os.path.join(base, 'requested', fname)
     with salt.utils.fopen(path, 'w') as fh_:
-        json.dump(data, fh_)
+        msgpack.dump(data, fh_)
 
 
 def change_minion_cachedir(
@@ -1902,16 +1900,16 @@ def change_minion_cachedir(
     if base is None:
         base = os.path.join(syspaths.CACHE_DIR, 'cloud')
 
-    fname = '{0}.json'.format(minion_id)
+    fname = '{0}.pp'.format(minion_id)
     path = os.path.join(base, cachedir, fname)
 
     with salt.utils.fopen(path, 'r') as fh_:
-        cache_data = json.load(fh_)
+        cache_data = msgpack.load(fh_)
 
     cache_data.update(data)
 
     with salt.utils.fopen(path, 'w') as fh_:
-        json.dump(cache_data, fh_)
+        msgpack.dump(cache_data, fh_)
 
 
 def activate_minion_cachedir(minion_id, base=None):
@@ -1923,7 +1921,7 @@ def activate_minion_cachedir(minion_id, base=None):
     if base is None:
         base = os.path.join(syspaths.CACHE_DIR, 'cloud')
 
-    fname = '{0}.json'.format(minion_id)
+    fname = '{0}.pp'.format(minion_id)
     src = os.path.join(base, 'requested', fname)
     dst = os.path.join(base, 'active')
     shutil.move(src, dst)
@@ -1942,7 +1940,7 @@ def delete_minion_cachedir(minion_id, provider, opts, base=None):
         base = os.path.join(syspaths.CACHE_DIR, 'cloud')
 
     driver = opts['providers'][provider].keys()[0]
-    fname = '{0}.json'.format(minion_id)
+    fname = '{0}.pp'.format(minion_id)
     for cachedir in ('requested', 'active'):
         path = os.path.join(base, cachedir, driver, provider, fname)
         log.debug('path: {0}'.format(path))
@@ -1962,7 +1960,7 @@ def update_bootstrap(config):
             'Updating the bootstrap-salt.sh script requires the '
             'Python requests library to be installed'
         )}
-    url = 'https://raw.githubusercontent.com/saltstack/salt-bootstrap/stable/bootstrap-salt.sh'
+    url = 'https://bootstrap.saltstack.com'
     req = requests.get(url)
     if req.status_code != 200:
         return {'error': (
@@ -2067,7 +2065,7 @@ def cache_node_list(nodes, provider, opts):
 
     .. versionadded:: Helium
     '''
-    if not 'update_cachedir' in opts or not opts['update_cachedir']:
+    if 'update_cachedir' not in opts or not opts['update_cachedir']:
         return
 
     base = os.path.join(init_cachedir(), 'active')
@@ -2081,9 +2079,9 @@ def cache_node_list(nodes, provider, opts):
 
     for node in nodes:
         diff_node_cache(prov_dir, node, nodes[node], opts)
-        path = os.path.join(prov_dir, '{0}.json'.format(node))
+        path = os.path.join(prov_dir, '{0}.pp'.format(node))
         with salt.utils.fopen(path, 'w') as fh_:
-            json.dump(nodes[node], fh_)
+            msgpack.dump(nodes[node], fh_)
 
 
 def cache_node(node, provider, opts):
@@ -2092,7 +2090,7 @@ def cache_node(node, provider, opts):
 
     .. versionadded:: Helium
     '''
-    if not 'update_cachedir' in opts or not opts['update_cachedir']:
+    if 'update_cachedir' not in opts or not opts['update_cachedir']:
         return
 
     if not os.path.exists(os.path.join(syspaths.CACHE_DIR, 'cloud', 'active')):
@@ -2103,9 +2101,9 @@ def cache_node(node, provider, opts):
     prov_dir = os.path.join(base, driver, provider)
     if not os.path.exists(prov_dir):
         os.makedirs(prov_dir)
-    path = os.path.join(prov_dir, '{0}.json'.format(node['name']))
+    path = os.path.join(prov_dir, '{0}.pp'.format(node['name']))
     with salt.utils.fopen(path, 'w') as fh_:
-        json.dump(node, fh_)
+        msgpack.dump(node, fh_)
 
 
 def missing_node_cache(prov_dir, node_list, provider, opts):
@@ -2124,7 +2122,7 @@ def missing_node_cache(prov_dir, node_list, provider, opts):
     '''
     cached_nodes = []
     for node in os.listdir(prov_dir):
-        cached_nodes.append(node.replace('.json', ''))
+        cached_nodes.append(node.replace('.pp', ''))
 
     log.debug(sorted(cached_nodes))
     log.debug(sorted(node_list))
@@ -2155,11 +2153,11 @@ def diff_node_cache(prov_dir, node, new_data, opts):
 
     .. versionadded:: Helium
     '''
-    if not 'diff_cache_events' in opts or not opts['diff_cache_events']:
+    if 'diff_cache_events' not in opts or not opts['diff_cache_events']:
         return
 
     path = os.path.join(prov_dir, node)
-    path = '{0}.json'.format(path)
+    path = '{0}.pp'.format(path)
 
     if not os.path.exists(path):
         event_data = _strip_cache_events(new_data, opts)
@@ -2175,7 +2173,7 @@ def diff_node_cache(prov_dir, node, new_data, opts):
 
     with salt.utils.fopen(path, 'r') as fh_:
         try:
-            cache_data = json.load(fh_)
+            cache_data = msgpack.load(fh_)
         except ValueError as exc:
             log.warning('Cache for {0} was corrupt: Deleting'.format(node))
             cache_data = {}

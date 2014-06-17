@@ -124,6 +124,7 @@ RED_BOLD = '\033[01;31m'
 ENDC = '\033[0m'
 
 log = logging.getLogger(__name__)
+_empty = object()
 
 
 def get_function_argspec(func):
@@ -1211,7 +1212,7 @@ def subdict_match(data, expr, delim=':', regex_match=False):
         matchstr = delim.join(splits[idx:])
         log.debug('Attempting to match {0!r} in {1!r} using delimiter '
                   '{2!r}'.format(matchstr, key, delim))
-        match = traverse_dict(data, key, {}, delim=delim)
+        match = traverse_dict_and_list(data, key, {}, delim=delim)
         if match == {}:
             continue
         if isinstance(match, dict):
@@ -1246,6 +1247,26 @@ def traverse_dict(data, key, default, delim=':'):
         for each in key.split(delim):
             data = data[each]
     except (KeyError, IndexError, TypeError):
+        # Encountered a non-indexable value in the middle of traversing
+        return default
+    return data
+
+
+def traverse_dict_and_list(data, key, default, delim=':'):
+    '''
+    Traverse a dict or list using a colon-delimited (or otherwise delimited,
+    using the "delim" param) target string. The target 'foo:bar:0' will
+    return data['foo']['bar'][0] if this value exists, and will otherwise
+    return the dict in the default argument.
+    Function will automatically determine the target type.
+    The target 'foo:bar:0' will return data['foo']['bar'][0] if data like
+    {'foo':{'bar':['baz']}} , if data like {'foo':{'bar':{'0':'baz'}}}
+    then return data['foo']['bar']['0']
+    '''
+    try:
+        for each in key.split(delim):
+            data = data[int(each)] if isinstance(data, list) else data[each]
+    except (KeyError, IndexError, TypeError, ValueError):
         # Encountered a non-indexable value in the middle of traversing
         return default
     return data
@@ -1434,20 +1455,26 @@ def check_state_result(running):
     if not running:
         return False
 
+    ret = True
     for state_result in running.itervalues():
         if not isinstance(state_result, dict):
             # return false when hosts return a list instead of a dict
-            return False
-
-        if 'result' in state_result:
-            if state_result.get('result', False) is False:
-                return False
-            return True
-
-        # Check nested state results
-        return check_state_result(state_result)
-
-    return True
+            ret = False
+        if ret:
+            result = state_result.get('result', _empty)
+            if result is False:
+                ret = False
+            # only override return value if we are not already failed
+            elif (
+                result is _empty
+                and isinstance(state_result, dict)
+                and ret
+            ):
+                ret = check_state_result(state_result)
+        # return as soon as we got a failure
+        if not ret:
+            break
+    return ret
 
 
 def test_mode(**kwargs):
@@ -1533,7 +1560,7 @@ def option(value, default='', opts=None, pillar=None):
         (pillar, value),
     )
     for source, val in sources:
-        out = traverse_dict(source, val, default)
+        out = traverse_dict_and_list(source, val, default)
         if out is not default:
             return out
     return default

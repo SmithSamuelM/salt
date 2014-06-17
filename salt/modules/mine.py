@@ -116,7 +116,7 @@ def send(func, *args, **kwargs):
 
         salt '*' mine.send network.interfaces eth0
     '''
-    if not func in __salt__:
+    if func not in __salt__:
         return False
     data = {}
     arg_data = salt.utils.arg_lookup(__salt__[func])
@@ -321,8 +321,9 @@ def get_docker(interfaces=None, cidrs=None):
         else:
             for interface in interfaces:
                 if interface in containers['host']['interfaces']:
-                    for item in containers['host']['interfaces'][interface]['inet']:
-                        host_ips.append(item['address'])
+                    if 'inet' in containers['host']['interfaces'][interface]:
+                        for item in containers['host']['interfaces'][interface]['inet']:
+                            host_ips.append(item['address'])
         host_ips = list(set(host_ips))
 
         # Filter out ips from host_ips with cidrs

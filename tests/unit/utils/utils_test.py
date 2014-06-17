@@ -15,6 +15,7 @@ from salttesting.mock import (
 ensure_in_syspath('../../')
 
 # Import Salt libs
+from salt.utils.odict import OrderedDict
 from salt import utils
 from salt.utils import args
 from salt.exceptions import (SaltInvocationError, SaltSystemExit, CommandNotFoundError)
@@ -217,6 +218,18 @@ class UtilsTestCase(TestCase):
                              utils.traverse_dict(test_two_level_dict, 'foo:bar:baz', {'not_found': 'nope'}))
         self.assertEqual('baz', utils.traverse_dict(test_two_level_dict, 'foo:bar', {'not_found': 'not_found'}))
 
+    def test_traverse_dict_and_list(self):
+        test_two_level_dict = {'foo': {'bar': 'baz'}}
+        test_two_level_dict_and_list = {'foo': ['bar', 'baz']}
+
+        self.assertDictEqual({'not_found': 'nope'},
+                             utils.traverse_dict_and_list(test_two_level_dict, 'foo:bar:baz', {'not_found': 'nope'}))
+        self.assertEqual('baz', utils.traverse_dict_and_list(test_two_level_dict, 'foo:bar', {'not_found': 'not_found'}))
+
+        self.assertDictEqual({'not_found': 'nope'},
+                             utils.traverse_dict_and_list(test_two_level_dict_and_list, 'foo:bar', {'not_found': 'nope'}))
+        self.assertEqual('baz', utils.traverse_dict_and_list(test_two_level_dict_and_list, 'foo:1', {'not_found': 'not_found'}))
+
     def test_clean_kwargs(self):
         self.assertDictEqual(utils.clean_kwargs(foo='bar'), {'foo': 'bar'})
         self.assertDictEqual(utils.clean_kwargs(__pub_foo='bar'), {})
@@ -227,10 +240,109 @@ class UtilsTestCase(TestCase):
         self.assertFalse(utils.check_state_result([]), "Failed to handle an invalid data type.")
         self.assertFalse(utils.check_state_result({}), "Failed to handle an empty dictionary.")
         self.assertFalse(utils.check_state_result({'host1': []}), "Failed to handle an invalid host data structure.")
-
         test_valid_state = {'host1': {'test_state': {'result': 'We have liftoff!'}}}
         self.assertTrue(utils.check_state_result(test_valid_state))
-
+        test_valid_false_states = {
+            'test1': OrderedDict([
+                ('host1',
+                 OrderedDict([
+                     ('test_state0', {'result':  True}),
+                     ('test_state', {'result': False}),
+                 ])),
+            ]),
+            'test2': OrderedDict([
+                ('host1',
+                 OrderedDict([
+                     ('test_state0', {'result':  True}),
+                     ('test_state', {'result': True}),
+                 ])),
+                ('host2',
+                 OrderedDict([
+                     ('test_state0', {'result':  True}),
+                     ('test_state', {'result': False}),
+                 ])),
+            ]),
+            'test3': ['a'],
+            'test4': OrderedDict([
+                ('asup', OrderedDict([
+                    ('host1',
+                     OrderedDict([
+                         ('test_state0', {'result':  True}),
+                         ('test_state', {'result': True}),
+                     ])),
+                    ('host2',
+                     OrderedDict([
+                         ('test_state0', {'result':  True}),
+                         ('test_state', {'result': False}),
+                     ]))
+                ]))
+            ]),
+            'test5': OrderedDict([
+                ('asup', OrderedDict([
+                    ('host1',
+                     OrderedDict([
+                         ('test_state0', {'result':  True}),
+                         ('test_state', {'result': True}),
+                     ])),
+                    ('host2', [])
+                ]))
+            ])
+        }
+        for test, data in test_valid_false_states.items():
+            self.assertFalse(
+                utils.check_state_result(data),
+                msg='{0} failed'.format(test))
+        test_valid_true_states = {
+            'test1': OrderedDict([
+                ('host1',
+                 OrderedDict([
+                     ('test_state0', {'result':  True}),
+                     ('test_state', {'result': True}),
+                 ])),
+            ]),
+            'test3': OrderedDict([
+                ('host1',
+                 OrderedDict([
+                     ('test_state0', {'result':  True}),
+                     ('test_state', {'result': True}),
+                 ])),
+                ('host2',
+                 OrderedDict([
+                     ('test_state0', {'result':  True}),
+                     ('test_state', {'result': True}),
+                 ])),
+            ]),
+            'test4': OrderedDict([
+                ('asup', OrderedDict([
+                    ('host1',
+                     OrderedDict([
+                         ('test_state0', {'result':  True}),
+                         ('test_state', {'result': True}),
+                     ])),
+                    ('host2',
+                     OrderedDict([
+                         ('test_state0', {'result':  True}),
+                         ('test_state', {'result': True}),
+                     ]))
+                ]))
+            ]),
+            'test2': OrderedDict([
+                ('host1',
+                 OrderedDict([
+                     ('test_state0', {'result':  None}),
+                     ('test_state', {'result': True}),
+                 ])),
+                ('host2',
+                 OrderedDict([
+                     ('test_state0', {'result':  True}),
+                     ('test_state', {'result': 'abc'}),
+                 ]))
+            ])
+        }
+        for test, data in test_valid_true_states.items():
+            self.assertTrue(
+                utils.check_state_result(data),
+                msg='{0} failed'.format(test))
         test_valid_false_state = {'host1': {'test_state': {'result': False}}}
         self.assertFalse(utils.check_state_result(test_valid_false_state))
 

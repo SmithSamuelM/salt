@@ -552,7 +552,6 @@ def request_instance(vm_=None, call=None):
 
     try:
         data = conn.create_node(**kwargs)
-        return data, vm_
     except Exception as exc:
         raise SaltCloudSystemExit(
             'Error creating {0} on OpenStack\n\n'
@@ -561,6 +560,9 @@ def request_instance(vm_=None, call=None):
                 vm_['name'], exc
             )
         )
+
+    vm_['password'] = data.extra.get('password', None)
+    return data, vm_
 
 
 def create(vm_):
@@ -672,6 +674,7 @@ def create(vm_):
                 log.debug('Waiting for managed cloud automation to complete')
                 return
 
+        public = node['public_ips']
         if floating:
             try:
                 name = data.name
@@ -682,6 +685,8 @@ def create(vm_):
                         ip, name
                     )
                 )
+                data.public_ips.append(ip)
+                public = data.public_ips
             except Exception:
                 # Note(pabelanger): Because we loop, we only want to attach the
                 # floating IP address one. So, expect failures if the IP is
@@ -690,7 +695,6 @@ def create(vm_):
 
         result = []
         private = node['private_ips']
-        public = node['public_ips']
         if private and not public:
             log.warn(
                 'Private IPs returned, but not public... Checking for '

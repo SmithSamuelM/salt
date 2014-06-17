@@ -89,7 +89,7 @@ def clean_fsbackend(opts):
                 log.debug('Clearing {0}fs env cache'.format(backend))
                 try:
                     os.remove(env_cache)
-                except (IOError, OSError) as exc:
+                except OSError as exc:
                     log.critical(
                         'Unable to clear env cache file {0}: {1}'
                         .format(env_cache, exc)
@@ -108,7 +108,7 @@ def clean_fsbackend(opts):
                 cache_file = os.path.join(file_lists_dir, file_lists_cache)
                 try:
                     os.remove(cache_file)
-                except (IOError, OSError) as exc:
+                except OSError as exc:
                     log.critical(
                         'Unable to file_lists cache file {0}: {1}'
                         .format(cache_file, exc)
@@ -698,7 +698,7 @@ class RemoteFuncs(object):
                 pub_load['timeout'] = int(load['timeout'])
             except ValueError:
                 msg = 'Failed to parse timeout value: {0}'.format(
-                        load['tmo'])
+                        load['timeout'])
                 log.warn(msg)
                 return {}
         if 'tgt_type' in load:
@@ -1121,14 +1121,18 @@ class LocalFuncs(object):
                 )
                 return ''
             if not token:
-                log.warning('Authentication failure of type "token" occurred.')
+                log.warning('Authentication failure of type "token" occurred. \
+                            Token could not be retrieved.')
                 return ''
             if token['eauth'] not in self.opts['external_auth']:
-                log.warning('Authentication failure of type "token" occurred.')
+                log.warning('Authentication failure of type "token" occurred. \
+                            Authentication type of {0} not present.').format(token['eauth'])
                 return ''
             if not ((token['name'] in self.opts['external_auth'][token['eauth']]) |
                     ('*' in self.opts['external_auth'][token['eauth']])):
-                log.warning('Authentication failure of type "token" occurred.')
+                log.warning('Authentication failure of type "token" occurred. \
+                            Token does not verify against eauth provider: {0}').format(
+                                    self.opts['external_auth'])
                 return ''
             good = self.ckminions.auth_check(
                     self.opts['external_auth'][token['eauth']][token['name']]

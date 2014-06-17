@@ -37,7 +37,7 @@ class PublishModuleTest(integration.ModuleCase,
             '__pub_tgt_type',
         )
         for name in check_true:
-            if not name in ret:
+            if name not in ret:
                 print name
             self.assertTrue(name in ret)
 
@@ -52,7 +52,7 @@ class PublishModuleTest(integration.ModuleCase,
         '''
         ret = self.run_function(
             'publish.full_data',
-            ['minion', 'test.fib', ['40']]
+            ['minion', 'test.fib', 40]
         )
         self.assertTrue(ret)
         self.assertEqual(ret['minion']['ret'][0][-1], 34)
@@ -79,7 +79,7 @@ class PublishModuleTest(integration.ModuleCase,
             '__pub_tgt_type',
         )
         for name in check_true:
-            if not name in ret:
+            if name not in ret:
                 print name
             self.assertTrue(name in ret)
 

@@ -92,6 +92,7 @@ and Friday, and 3pm on Tuesday and Thursday.
             start: 8:00am
             end: 5:00pm
 
+w
 This will schedule the command: state.sls httpd test=True every 3600 seconds
 (every hour) between the hours of 8am and 5pm.  The range parameter must be a
 dictionary with the date strings using the dateutil format.
@@ -190,21 +191,141 @@ class Schedule(object):
         return self.opts.get(opt, {})
 
     def delete_job(self, name):
+        '''
+        Deletes a job from the scheduler.
+        '''
+
         # ensure job exists, then delete it
         if name in self.opts['schedule']:
             del self.opts['schedule'][name]
+
+        # If job is in pillar, delete it there too
+        if 'schedule' in self.opts['pillar']:
+            if name in self.opts['pillar']['schedule']:
+                del self.opts['pillar']['schedule'][name]
 
         # remove from self.intervals
         if name in self.intervals:
             del self.intervals[name]
 
-    def add_job(self, name, schedule):
-        self.opts['schedule'][name] = schedule
+    def add_job(self, data):
+        '''
+        Adds a new job to the scheduler. The format is the same as required in
+        the configuration file. See the docs on how YAML is interpreted into
+        python data-structures to make sure, you pass correct dictionaries.
+        '''
 
-    def modify_job(self, name, schedule):
-        if name in self.opts['schedule']:
-            self.delete_job(name)
-        self.opts['schedule'][name] = schedule
+        # we dont do any checking here besides making sure its a dict.
+        # eval() already does for us and raises errors accordingly
+        if not type(data) is dict:
+            raise ValueError('Scheduled jobs have to be of type dict')
+        if not len(data.keys()) == 1:
+            raise ValueError('You can only schedule one new job at a time')
+
+        new_job = data.keys()[0]
+
+        if new_job in self.opts['schedule']:
+            log.info('Updating job settings for scheduled '
+                     'job: {0}'.format(new_job))
+        else:
+            log.info('Added new job {0} to scheduler'.format(new_job))
+        self.opts['schedule'].update(data)
+
+    def enable_job(self, name, where=None):
+        '''
+        Enable a job in the scheduler.
+        '''
+        if where == 'pillar':
+            self.opts['pillar']['schedule'][name]['enabled'] = True
+        else:
+            self.opts['schedule'][name]['enabled'] = True
+        log.info('Enabling job {0} in scheduler'.format(name))
+
+    def disable_job(self, name, where=None):
+        '''
+        Disable a job in the scheduler.
+        '''
+        if where == 'pillar':
+            self.opts['pillar']['schedule'][name]['enabled'] = False
+        else:
+            self.opts['schedule'][name]['enabled'] = False
+        log.info('Disabling job {0} in scheduler'.format(name))
+
+    def modify_job(self, name, schedule, where=None):
+        '''
+        Modify a job in the scheduler.
+        '''
+        if where == 'pillar':
+            if name in self.opts['pillar']['schedule']:
+                self.delete_job(name)
+            self.opts['pillar']['schedule'][name] = schedule
+        else:
+            if name in self.opts['schedule']:
+                self.delete_job(name)
+            self.opts['schedule'][name] = schedule
+
+    def run_job(self, name, where):
+        '''
+        Run a schedule job now
+        '''
+        if where == 'pillar':
+            data = self.opts['pillar']['schedule'][name]
+        else:
+            data = self.opts['schedule'][name]
+
+        if 'function' in data:
+            func = data['function']
+        elif 'func' in data:
+            func = data['func']
+        elif 'fun' in data:
+            func = data['fun']
+        else:
+            func = None
+        if func not in self.functions:
+            log.info(
+                'Invalid function: {0} in job {1}. Ignoring.'.format(
+                    func, name
+                )
+            )
+        else:
+            if 'name' not in data:
+                data['name'] = name
+            log.info(
+                'Running Job: {0}.'.format(name)
+            )
+            if self.opts.get('multiprocessing', True):
+                thread_cls = multiprocessing.Process
+            else:
+                thread_cls = threading.Thread
+            proc = thread_cls(target=self.handle_func, args=(func, data))
+            proc.start()
+            if self.opts.get('multiprocessing', True):
+                proc.join()
+
+    def enable_schedule(self):
+        '''
+        Enable the scheduler.
+        '''
+        self.opts['schedule']['enabled'] = True
+
+    def disable_schedule(self):
+        '''
+        Disable the scheduler.
+        '''
+        self.opts['schedule']['enabled'] = False
+
+    def reload(self, schedule):
+        '''
+        Reload the schedule from saved schedule file.
+        '''
+
+        # Remove all jobs from self.intervals
+        self.intervals = {}
+
+        if 'schedule' in self.opts:
+            self.opts['schedule'].update(schedule['schedule'])
+        else:
+            self.opts['schedule'] = schedule
 
     def handle_func(self, func, data):
         '''
@@ -232,8 +353,8 @@ class Schedule(object):
         if 'jid_include' not in data or data['jid_include']:
             jobcount = 0
             for basefilename in os.listdir(salt.minion.get_proc_dir(self.opts['cachedir'])):
-                fn = os.path.join(salt.minion.get_proc_dir(self.opts['cachedir']), basefilename)
-                with salt.utils.fopen(fn, 'r') as fp_:
+                fn_ = os.path.join(salt.minion.get_proc_dir(self.opts['cachedir']), basefilename)
+                with salt.utils.fopen(fn_, 'r') as fp_:
                     job = salt.payload.Serial(self.opts).load(fp_)
                     if 'schedule' in job:
                         log.debug('schedule.handle_func: Checking job against '
@@ -243,7 +364,7 @@ class Schedule(object):
                             log.debug(
                                 'schedule.handle_func: Incrementing jobcount, now '
                                 '{0}, maxrunning is {1}'.format(
-                                          jobcount, data['maxrunning']))
+                                    jobcount, data['maxrunning']))
                             if jobcount >= data['maxrunning']:
                                 log.debug(
                                     'schedule.handle_func: The scheduled job {0} '
@@ -301,7 +422,7 @@ class Schedule(object):
                     else:
                         log.info(
                             'Job {0} using invalid returner: {1} Ignoring.'.format(
-                            func, returner
+                                func, returner
                             )
                         )
         except Exception:
@@ -312,13 +433,13 @@ class Schedule(object):
         finally:
             try:
                 os.unlink(proc_fn)
-            except OSError as e:
-                if e.errno == errno.EEXIST:
+            except OSError as exc:
+                if exc.errno == errno.EEXIST:
                     # EEXIST is OK because the file is gone and that's what
                     # we wanted
                     pass
                 else:
-                    log.error("Failed to delete '{0}': {1}".format(proc_fn, e.errno))
+                    log.error("Failed to delete '{0}': {1}".format(proc_fn, exc.errno))
                     # Otherwise, failing to delete this file is not something
                     # we can cleanly handle.
                     raise
@@ -331,7 +452,14 @@ class Schedule(object):
         #log.debug('calling eval {0}'.format(schedule))
         if not isinstance(schedule, dict):
             return
+        if 'enabled' in schedule and not schedule['enabled']:
+            return
         for job, data in schedule.items():
+            if job == 'enabled':
+                continue
+            # Job is disabled, continue
+            if 'enabled' in data and not data['enabled']:
+                continue
             if 'function' in data:
                 func = data['function']
             elif 'func' in data:
@@ -359,7 +487,7 @@ class Schedule(object):
                     time_conflict = True
 
             if time_conflict:
-                log.info('Unable to use "seconds", "minutes", "hours", or "days" with "when" option.  Ignoring.')
+                log.error('Unable to use "seconds", "minutes", "hours", or "days" with "when" option.  Ignoring.')
                 continue
 
             # clean this up
@@ -371,7 +499,7 @@ class Schedule(object):
                 seconds += int(data.get('days', 0)) * 86400
             elif 'when' in data:
                 if not _WHEN_SUPPORTED:
-                    log.info('Missing python-dateutil.  Ignoring job {0}'.format(job))
+                    log.error('Missing python-dateutil.  Ignoring job {0}'.format(job))
                     continue
 
                 if isinstance(data['when'], list):
@@ -381,7 +509,7 @@ class Schedule(object):
                         try:
                             tmp = int(dateutil_parser.parse(i).strftime('%s'))
                         except ValueError:
-                            log.info('Invalid date string {0}.  Ignoring job {1}.'.format(i, job))
+                            log.error('Invalid date string {0}.  Ignoring job {1}.'.format(i, job))
                             continue
                         if tmp >= now:
                             _when.append(tmp)
@@ -402,11 +530,11 @@ class Schedule(object):
                         if seconds < 0:
                             continue
 
-                        if not '_when_run' in data:
+                        if '_when_run' not in data:
                             data['_when_run'] = True
 
                         # Backup the run time
-                        if not '_when' in data:
+                        if '_when' not in data:
                             data['_when'] = when
 
                         # A new 'when' ensure _when_run is True
@@ -421,7 +549,7 @@ class Schedule(object):
                     try:
                         when = int(dateutil_parser.parse(data['when']).strftime('%s'))
                     except ValueError:
-                        log.info('Invalid date string.  Ignoring')
+                        log.error('Invalid date string.  Ignoring')
                         continue
 
                     now = int(time.time())
@@ -431,11 +559,11 @@ class Schedule(object):
                     if seconds < 0:
                         continue
 
-                    if not '_when_run' in data:
+                    if '_when_run' not in data:
                         data['_when_run'] = True
 
                     # Backup the run time
-                    if not '_when' in data:
+                    if '_when' not in data:
                         data['_when'] = when
 
                     # A new 'when' ensure _when_run is True
@@ -466,7 +594,7 @@ class Schedule(object):
             else:
                 if 'splay' in data:
                     if 'when' in data:
-                        log.debug('Unable to use "splay" with "when" option at this time.  Ignoring.')
+                        log.error('Unable to use "splay" with "when" option at this time.  Ignoring.')
                     else:
                         data['_seconds'] = data['seconds']
 
@@ -481,19 +609,19 @@ class Schedule(object):
             if run:
                 if 'range' in data:
                     if not _RANGE_SUPPORTED:
-                        log.info('Missing python-dateutil.  Ignoring job {0}'.format(job))
+                        log.error('Missing python-dateutil.  Ignoring job {0}'.format(job))
                         continue
                     else:
                         if isinstance(data['range'], dict):
                             try:
                                 start = int(dateutil_parser.parse(data['range']['start']).strftime('%s'))
                             except ValueError:
-                                log.info('Invalid date string for start.  Ignoring job {0}.'.format(job))
+                                log.error('Invalid date string for start.  Ignoring job {0}.'.format(job))
                                 continue
                             try:
                                 end = int(dateutil_parser.parse(data['range']['end']).strftime('%s'))
                             except ValueError:
-                                log.info('Invalid date string for end.  Ignoring job {0}.'.format(job))
+                                log.error('Invalid date string for end.  Ignoring job {0}.'.format(job))
                                 continue
                             if end > start:
                                 if 'invert' in data['range'] and data['range']['invert']:
@@ -507,10 +635,12 @@ class Schedule(object):
                                     else:
                                         run = False
                             else:
-                                log.info('schedule.handle_func: Invalid range, end must be larger than start. Ignoring job {0}.'.format(job))
+                                log.error('schedule.handle_func: Invalid range, end must be larger than start. \
+                                         Ignoring job {0}.'.format(job))
                                 continue
                         else:
-                            log.info('schedule.handle_func: Invalid, range must be specified as a dictionary. Ignoring job {0}.'.format(job))
+                            log.error('schedule.handle_func: Invalid, range must be specified as a dictionary. \
+                                     Ignoring job {-1}.'.format(job))
                             continue
 
             if not run:
@@ -518,13 +648,14 @@ class Schedule(object):
             else:
                 if 'splay' in data:
                     if 'when' in data:
-                        log.debug('Unable to use "splay" with "when" option at this time.  Ignoring.')
+                        log.error('Unable to use "splay" with "when" option at this time.  Ignoring.')
                     else:
                         if isinstance(data['splay'], dict):
                             if data['splay']['end'] > data['splay']['start']:
                                 splay = random.randint(data['splay']['start'], data['splay']['end'])
                             else:
-                                log.info('schedule.handle_func: Invalid Splay, end must be larger than start. Ignoring splay.')
+                                log.error('schedule.handle_func: Invalid Splay, end must be larger than start. \
+                                         Ignoring splay.')
                                 splay = None
                         else:
                             splay = random.randint(0, data['splay'])
@@ -534,7 +665,7 @@ class Schedule(object):
                                       '{0} seconds to next run.'.format(splay))
                             data['seconds'] = data['_seconds'] + splay
 
-                log.debug('Running scheduled job: {0}'.format(job))
+                log.info('Running scheduled job: {0}'.format(job))
 
             if 'jid_include' not in data or data['jid_include']:
                 data['jid_include'] = True
@@ -545,7 +676,7 @@ class Schedule(object):
                               'number of {0}'.format(data['maxrunning']))
                 else:
                     log.info('schedule: maxrunning parameter was not specified for '
-                              'job {0}, defaulting to 1.'.format(job))
+                             'job {0}, defaulting to 1.'.format(job))
                     data['maxrunning'] = 1
 
             try:
@@ -569,9 +700,17 @@ def clean_proc_dir(opts):
     '''
 
     for basefilename in os.listdir(salt.minion.get_proc_dir(opts['cachedir'])):
-        fn = os.path.join(salt.minion.get_proc_dir(opts['cachedir']), basefilename)
-        with salt.utils.fopen(fn, 'r') as fp_:
-            job = salt.payload.Serial(opts).load(fp_)
+        fn_ = os.path.join(salt.minion.get_proc_dir(opts['cachedir']), basefilename)
+        with salt.utils.fopen(fn_, 'r') as fp_:
+            job = None
+            try:
+                job = salt.payload.Serial(opts).load(fp_)
+            except Exception:  # It's corrupted
+                try:
+                    os.unlink(fn_)
+                    continue
+                except OSError:
+                    continue
             log.debug('schedule.clean_proc_dir: checking job {0} for process '
                       'existence'.format(job))
             if job is not None and 'pid' in job:
@@ -584,6 +723,6 @@ def clean_proc_dir(opts):
                         fp_.close()
                     # Maybe the file is already gone
                     try:
-                        os.unlink(fn)
+                        os.unlink(fn_)
                     except OSError:
                         pass

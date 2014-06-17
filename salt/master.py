@@ -435,6 +435,25 @@ class Publisher(multiprocessing.Process):
                 context.term()
 
 
+class WorkerTrack(object):
+    def __init__(self, opts):
+        '''
+        Watches the worker procs
+        '''
+        self.opts = opts
+        self.counter = multiprocessing.Value('i', 0)
+        self.lock = multiprocessing.Lock()
+
+    def finished(self):
+        '''
+        To be called when a process finishes initializing
+        '''
+        with self.lock:
+            self.counter.value += 1
+        if int(self.opts['worker_threads']) == self.counter.value:
+            log.info('Master is ready to receive requests!')
+
+
 class ReqServer(object):
     '''
     Starts up the master request server, minions send results to this
@@ -457,6 +476,7 @@ class ReqServer(object):
         # Prepare the AES key
         self.key = key
         self.crypticle = crypticle
+        self.tracker = WorkerTrack(opts)
 
     def __bind(self):
         '''
@@ -476,11 +496,14 @@ class ReqServer(object):
             self.work_procs.append(MWorker(self.opts,
                     self.master_key,
                     self.key,
-                    self.crypticle))
+                    self.crypticle,
+                    tracker=self.tracker)
+            )
 
         for ind, proc in enumerate(self.work_procs):
             log.info('Starting Salt worker process {0}'.format(ind))
             proc.start()
+            log.info('Successfully started Salt worker process on PID: {0}'.format(proc.pid))
 
         self.workers.bind(self.w_uri)
 
@@ -569,7 +592,8 @@ class MWorker(multiprocessing.Process):
             opts,
             mkey,
             key,
-            crypticle):
+            crypticle,
+            tracker=None):
         multiprocessing.Process.__init__(self)
         self.opts = opts
         self.serial = salt.payload.Serial(opts)
@@ -577,6 +601,7 @@ class MWorker(multiprocessing.Process):
         self.mkey = mkey
         self.key = key
         self.k_mtime = 0
+        self.tracker = tracker
 
     def __bind(self):
         '''
@@ -590,6 +615,7 @@ class MWorker(multiprocessing.Process):
         log.info('Worker binding to socket {0}'.format(w_uri))
         try:
             socket.connect(w_uri)
+            self.tracker.finished()
             while True:
                 try:
                     package = socket.recv()
@@ -597,11 +623,23 @@ class MWorker(multiprocessing.Process):
                     payload = self.serial.loads(package)
                     ret = self.serial.dumps(self._handle_payload(payload))
                     socket.send(ret)
-                # Properly handle EINTR from SIGUSR1
-                except zmq.ZMQError as exc:
-                    if exc.errno == errno.EINTR:
+                # don't catch keyboard interrupts, just re-raise them
+                except KeyboardInterrupt:
+                    raise
+                # catch all other exceptions, so we don't go defunct
+                except Exception as exc:
+                    # Properly handle EINTR from SIGUSR1
+                    if isinstance(exc, zmq.ZMQError) and exc.errno == errno.EINTR:
                         continue
-                    raise exc
+                    log.critical('Unexpected Error in Mworker',
+                                 exc_info=True)
+                    # lets just redo the socket (since we won't know what state its in).
+                    # This protects against a single minion doing a send but not
+                    # recv and thereby causing an MWorker process to go defunct
+                    del socket
+                    socket = context.socket(zmq.REP)
+                    socket.connect(w_uri)
+
         # Changes here create a zeromq condition, check with thatch45 before
         # making any zeromq changes
         except KeyboardInterrupt:
@@ -1488,7 +1526,7 @@ class AESFuncs(object):
                 if 'jid' in minion:
                     ret['__jid__'] = minion['jid']
         for key, val in self.local.get_cache_returns(ret['__jid__']).items():
-            if not key in ret:
+            if key not in ret:
                 ret[key] = val
         if clear_load.get('form', '') != 'full':
             ret.pop('__jid__')
@@ -1747,6 +1785,29 @@ class ClearFuncs(object):
             return {'enc': 'clear',
                     'load': {'ret': False}}
         log.info('Authentication request from {id}'.format(**load))
+
+        minions = salt.utils.minions.CkMinions(self.opts).connected_ids()
+
+        # 0 is default which should be 'unlimited'
+        if self.opts['max_minions'] > 0:
+            if not len(minions) < self.opts['max_minions']:
+                # we reject new minions, minions that are already
+                # connected must be allowed for the mine, highstate, etc.
+                if load['id'] not in minions:
+                    msg = ('Too many minions connected (max_minions={0}). '
+                           'Rejecting connection from id '
+                           '{1}'.format(self.opts['max_minions'],
+                                        load['id'])
+                          )
+                    log.info(msg)
+                    eload = {'result': False,
+                             'act': 'full',
+                             'id': load['id'],
+                             'pub': load['pub']}
+
+                    self.event.fire_event(eload, tagify(prefix='auth'))
+                    return {'enc': 'clear',
+                            'load': {'ret': 'full'}}
 
         # Check if key is configured to be auto-rejected/signed
         auto_reject = self.__check_autoreject(load['id'])

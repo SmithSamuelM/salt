@@ -41,7 +41,6 @@ import salt.syspaths as syspaths
 from salt.exceptions import (
     EauthAuthenticationError, SaltInvocationError, SaltReqTimeoutError
 )
-from salt._compat import string_types
 
 # Try to import range from https://github.com/ytoolshed/range
 HAS_RANGE = False
@@ -211,9 +210,11 @@ class LocalClient(object):
         Common checks on the pub_data data structure returned from running pub
         '''
         if not pub_data:
+            # Failed to autnenticate, this could be a bunch of things
             raise EauthAuthenticationError(
-                'Failed to authenticate, is this user permitted to execute '
-                'commands?'
+                'Failed to authenticate! This could be a number of issues:'
+                '1: Is this user permitted to execute commands?'
+                '2: A disk error may have occured, check disk usage and inode usage.'
             )
 
         # Failed to connect to the master and send the pub
