@@ -56,6 +56,7 @@ class Caller(object):
         '''
         Call the module
         '''
+        # create global yard here wrapped in if opts['transport']=='raet'
         ret = {}
         fun = self.opts['fun']
         ret['jid'] = '{0:%Y%m%d%H%M%S%f}'.format(datetime.datetime.now())
@@ -147,6 +148,7 @@ class Caller(object):
                 self.return_pub(mret)
             except Exception:
                 pass
+        # close server here
         return ret
 
     def return_pub(self, ret):
